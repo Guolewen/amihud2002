@@ -17,9 +17,11 @@ def data_cleaning(raw_df):
     Amihud selection criteria I: The stock has return and volume data for more than 200 days during year
     y-1: This makes the estimated parameters more reliable. Also, the stock must be listed at the end of year y-1:
     """
-
+    # delete ADRs
+    # raw_df['SHRCD1'] = raw_df['SHRCD'].apply(lambda x: str(x)[0])
+    # raw_df = raw_df[raw_df['SHRCD1'] != '3'].reset_index()
     delist_df = raw_df[raw_df['DLSTCD'].notnull()].copy().reset_index(drop=True)
-
+    """
     # Choose the delisting code and assign  -0.3 to original df (1997 Shumway) Note 9
     delist_500 = delist_df[(delist_df['DLSTCD'] == 500) | (delist_df['DLSTCD'] == 520) | (
                 (delist_df['DLSTCD'] >= 551) & (delist_df['DLSTCD'] <= 573)) | (delist_df['DLSTCD'] == 574) | (
@@ -49,9 +51,9 @@ def data_cleaning(raw_df):
         print('The DLRET with value P is cleaned')
     # replace raw dara RET with DLRET for delisted stocks.
     raw_df.loc[delist_df.index, 'RET'] = delist_df['DLRET']
-
+    """
     # delete the observations where ret and vol is null and prc is negative(which means there is no closing price data)
-    df_notnull = raw_df[(raw_df['RET'].notnull()) & (raw_df['VOL'].notnull()) &
+    df_notnull = raw_df[(raw_df['RET'].notnull()) & (raw_df['VOL'] >= 0) &
                         (raw_df['RET'] != 'A') & (raw_df['RET'] != 'B') & (raw_df['RET'] != 'C') &
                         (raw_df['RET'] != 'D') & (raw_df['RET'] != 'E')].reset_index(drop=True)
     print("The number of obs with RET and VOL is", len(df_notnull), "The raw df obs is", len(raw_df))
@@ -63,7 +65,7 @@ def data_cleaning(raw_df):
     # stocks less than 200 trading days each year
     df_counts = df_notnull.groupby(['year', 'PERMNO']).size().reset_index(name='counts')
     df_trading_days_200 = df_counts[df_counts['counts'] > 200][['year', 'PERMNO']]
-    """
+
     # stocks delisted in this year
     delist_df['year'] = delist_df['date'].apply(lambda x: str(x)[0:4])
     group_delist = delist_df.groupby(['year'])
@@ -73,29 +75,23 @@ def data_cleaning(raw_df):
         final_list = list(set_delist)
         stocks_delist.update({year: final_list})
     df_delistandtradingdays = df_trading_days_200.groupby(['year']).apply(lambda x: delete_stock(x, stocks_delist)).reset_index(drop=True)
-    """
-    # the following delete vol equal 0 and price is negative
-    df_compute_amihud = df_notnull[(df_notnull['VOL'] != 0) & (df_notnull['PRC'] > 0)].reset_index(drop=True)
-    df_compute_amihud['dollar_vol'] = df_compute_amihud['PRC'] * df_compute_amihud['VOL']
-    df_compute_amihud['amihud_d'] = abs(df_compute_amihud['RET'].astype(np.float64)) / df_compute_amihud['dollar_vol']
-    df_div_amihud = df_compute_amihud.groupby(['year', 'PERMNO']).sum().reset_index()[['year', 'PERMNO', 'amihud_d', 'DIVAMT']]
-    df_div_amihud['counts'] = df_compute_amihud.groupby(['year', 'PERMNO']).size().reset_index(name='counts')['counts']
-    df_step1 = df_trading_days_200.merge(df_div_amihud, 'left', on=['year', 'PERMNO'])
 
-    """
+    # the following delete vol equal 0 and price is negative
+    df_notnull = df_notnull[(df_notnull['VOL'] != 0) & (df_notnull['PRC'] > 0)].reset_index(drop=True)
     df_notnull['dollar_vol'] = df_notnull['PRC'] * df_notnull['VOL']
     df_notnull['amihud_d'] = abs(df_notnull['RET'].astype(np.float64)) / df_notnull['dollar_vol']
     df_div_amihud = df_notnull.groupby(['year', 'PERMNO']).sum().reset_index()[['year', 'PERMNO', 'amihud_d', 'DIVAMT']]
-    """
+    df_div_amihud['counts'] = df_notnull.groupby(['year', 'PERMNO']).size().reset_index(name='counts')['counts']
+    df_step1 = df_delistandtradingdays.merge(df_div_amihud, 'left', on=['year', 'PERMNO'])
     # step ii and iii
     # stocks less than 5 dollors at the year end shrout not equal to zero
     df_last = df_notnull.groupby(['year', 'PERMNO']).last().reset_index()
-    df_step23 = df_last[(abs(df_last['PRC']) > 5) & (df_last['SHROUT'] != 0)].reset_index(drop=True)[['PERMNO', 'year', 'PRC', 'SHROUT']]
+    df_step23 = df_last[((df_last['PRC']) > 5) & (df_last['SHROUT'] != 0)].reset_index(drop=True)[['PERMNO', 'year', 'PRC', 'SHROUT']]
     df_step123 = df_step1.merge(df_step23, 'inner', on=['PERMNO', 'year'])
     # calculate annual based variables
     df_step123['yield'] = (df_step123['DIVAMT']) / abs(df_step123['PRC']) * 100
     df_step123['amihud_y'] = (df_step123['amihud_d'] / df_step123['counts']) * 1000000
-    df_step123['size'] = abs((df_step123['PRC']) * df_step123['SHROUT']) / 1000
+    df_step123['size'] = (df_step123['PRC']) * df_step123['SHROUT'] / 1000
     # iv step deletion
     print("after step123", df_step123.groupby(['year']).size().reset_index(name='counts'))
     def delete_amihud(x):
@@ -112,6 +108,7 @@ def data_cleaning(raw_df):
     print("final counts", final_df.groupby(['year']).size().reset_index(name='counts'))
     # annual means and std
     print("mean", final_df.groupby(['year']).mean().reset_index()[['amihud_y', 'yield', 'size']])
+    final_df.groupby(['year']).mean().reset_index()[['amihud_y', 'yield', 'size']].to_csv(r'D:\wooldride_econometrics\paper_liq_replicating\amihud_2002\mean1.csv', index=False)
     print("std", final_df.groupby(['year']).std().reset_index()[['amihud_y', 'yield', 'size']])
     # mean of annual mean
     print(np.mean(final_df.groupby(['year']).mean().reset_index()['amihud_y']))
